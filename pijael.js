@@ -77,6 +77,8 @@ class Parser {
     this.tokens = tokens;
     this.n();
 
+    this.private = [{ }];
+
     this.vars = {
       "open": new Node(
         args => {
@@ -115,12 +117,12 @@ class Parser {
     const res = this.lines();
 
     if(this.current.type != "end")
-      throw new Error("Unparsed");
+      throw new Error("Unparsed at " + this.current.type);
 
     return res;
   }
 
-  // n; n;
+  // n; n
   lines(){
     const lines = [];
     let res = this.pipe();
@@ -136,6 +138,15 @@ class Parser {
         lines, "lines"
       );
     }
+    /*return new Node(
+      (args, a) => {
+        this.private.push({ });
+        const ret = a.v(args);
+        this.private.pop();
+        return ret;
+      },
+      [res], "lines-wrapper"
+    );*/
     return res;
   }
 
@@ -197,9 +208,14 @@ class Parser {
      this.n();
      res = new Node(
        (args, a, b) => {
-         this.vars[a.tokens[0].value] = new Node(
+         const name = a.tokens[0].value;
+         const val = new Node(
            (args, c) => args ? c.v(args) : c, [b], "function"
          );
+         if(name[0] == "_")
+           this.private[this.private.length - 1][name] = val;
+         else
+           this.vars[name] = val;
          return args ? b.v(args) : b;
        },
        [res, this.pipe()], "declaration"
@@ -209,7 +225,7 @@ class Parser {
   }
 
   assign(){
-    let res = this.expr();
+    let res = this.iterate();
     while(
       this.current.type != "end" &&
       ["ass"].includes(this.current.type)
@@ -218,12 +234,70 @@ class Parser {
       res = new Node(
         (args, a, b) => {
           const r = b.v(args);
-          this.vars[a.tokens[0].value] = new Node(
+          const name = a.tokens[0].value;
+          const val = new Node(
             (args, c) => c, [r], "num"
           );
+          if(name[0] == "_")
+            this.private[this.private.length - 1][name] = val;
+          else
+            this.vars[name] = val;
           return r;
         },
         [res, this.assign()], "assign"
+      );
+    }
+    return res;
+  }
+
+  iterate(){
+    let res = this.exist();
+    while(
+      this.current.type != "end" &&
+      ["ite"].includes(this.current.type)
+    ){
+      this.n();
+      res = new Node(
+        (args, a, b) =>
+          [].concat(a.v(args).map((e, i) =>
+            b.v([].concat(e).concat(new Byte(i))))),
+        [res, this.pipe()], "iterator"
+      );
+    }
+    return res;
+  }
+
+  exist(){
+    let res = this.push();
+    while(
+      this.current.type != "end" &&
+      ["exi"].includes(this.current.type)
+    ){
+      this.n();
+      res = new Node(
+        (args, a, b) => {
+            let ret = new Byte(0);
+            while(a.v(args) - 0)
+              ret = b.v([].concat(ret));
+            return ret;
+        },
+        [res, this.pipe()], "existence"
+      );
+    }
+    return res;
+  }
+
+  push(){
+    let res = this.expr();
+    while(
+      this.current.type != "end" &&
+      ["pus"].includes(this.current.type)
+    ){
+      this.n();
+      res = new Node(
+        (args, a, b) =>
+          [].concat(a.v(args)).concat(b.v(args)),
+        [res, this.pipe()], "push"
       );
     }
     return res;
@@ -285,7 +359,17 @@ class Parser {
     } else if(token.type == "lit"){
       this.n();
       return new Node(
-        (args, a) => this.vars[a.value]?.v(args) ?? new Byte(0),
+        (args, a) => {
+          const name = a.value;
+          let ret;
+          this.private.push({ });
+          if(name[0] == "_")
+            ret = this.private[this.private.length - 2][name]?.v(args);
+          else
+            ret = this.vars[name]?.v(args);
+          this.private.pop();
+          return ret ?? new Byte(0);
+        },
         [token], "lit"
       );
     } else if(["add", "sub"].includes(token.type)){
@@ -327,12 +411,15 @@ const reg = {
   "bdl": /\[/,
   "bdr": /\]/,
   "lit": /[a-zA-Z_][0-9a-zA-Z_]*/,
-  "dec": /\:/
+  "dec": /\:/,
+  "ite": /\#/,
+  "exi": /\@/,
+  "pus": /\</
 };
 
 const ws = /[\t \n]*/;
 
-const code = `
+/*const code = `
 
 if_equal: $0 - $1 | $0 / $0;
 
@@ -340,7 +427,6 @@ a = 54;
 b = 54;
 
 [(_:
-  /* if equal */
   x = 69
 ), (_:
   x = 169
@@ -356,10 +442,29 @@ _100 = 48 + (x, 10 | mod);
 
 (_100, _10, _1, 10), 1 | put
 
+`;*/
+
+const code = `
+
+unique: (
+
+  (_l = $0) # (
+    _n = $(_a = 0);
+    _l # _a = _a + 1 - ($0 - _n | $0 / $0);
+    _u = _u + 1 / _a
+  ); _u
+);
+
+
+list = (0, 4, 1, 2, 3, 4, 6, 0, 1, 2, 5, 9, 6);
+list, 0 | unique
+
 `;
+
 
 const lexer = new Lexer(reg, ws);
 const tokens = lexer.lex(code);
 const parser = new Parser(tokens);
 const tree = parser.parse();
 const result = tree.v();
+console.log(result);
